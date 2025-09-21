@@ -1,5 +1,3 @@
-
-
 export interface UserProfile {
     uid: string;
     name: string;
@@ -20,17 +18,12 @@ export interface Class {
 }
 
 export interface Enrollment {
-    id: string;
+    id:string;
     classId: string;
     studentId: string;
     studentName: string;
     status: 'pending' | 'approved';
     className?: string; // Optional for display purposes
-}
-
-export interface ChatMessage {
-  role: 'user' | 'model';
-  text: string;
 }
 
 // Simplified WebRTC signal type for Firestore

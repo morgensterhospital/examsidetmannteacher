@@ -1,9 +1,10 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { Link } from 'react-router-dom';
 import { useAuth } from '../App';
 import * as api from '../services/api';
 import type { Class, Enrollment, UserProfile } from '../types';
 import Spinner from '../components/Spinner';
+import LiveSessionModal from '../components/LiveSessionModal';
+import { db } from '../services/firebase';
 
 const TeacherDashboard: React.FC<{ profile: UserProfile }> = ({ profile }) => {
     const [classes, setClasses] = useState<Class[]>([]);
@@ -11,6 +12,9 @@ const TeacherDashboard: React.FC<{ profile: UserProfile }> = ({ profile }) => {
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState('');
     const [newClass, setNewClass] = useState({ className: '', subject: '', level: 'olevel' as const });
+    
+    const [isModalOpen, setIsModalOpen] = useState(false);
+    const [activeClassId, setActiveClassId] = useState<string | null>(null);
 
     const fetchData = useCallback(async () => {
         try {
@@ -61,17 +65,24 @@ const TeacherDashboard: React.FC<{ profile: UserProfile }> = ({ profile }) => {
         }
     };
 
-    const handleSessionToggle = async (classId: string, isLive: boolean) => {
+    const handleStartSession = async (classId: string) => {
         try {
-            if (isLive) {
-                await api.endSession(classId);
-            } else {
-                await api.startSession(classId);
-            }
-            fetchData(); // Refresh
+            await api.startSession(classId);
+            setActiveClassId(classId);
+            setIsModalOpen(true);
+            fetchData();
         } catch (err) {
-             setError('Failed to update session status.');
+             setError('Failed to start session.');
         }
+    };
+    
+    const handleCloseModal = () => {
+        if (activeClassId) {
+            api.endSession(activeClassId);
+        }
+        setIsModalOpen(false);
+        setActiveClassId(null);
+        fetchData();
     };
 
 
@@ -79,6 +90,10 @@ const TeacherDashboard: React.FC<{ profile: UserProfile }> = ({ profile }) => {
 
     return (
         <div className="space-y-12">
+            {isModalOpen && activeClassId && (
+                <LiveSessionModal classId={activeClassId} userProfile={profile} onClose={handleCloseModal} />
+            )}
+
             {error && <p className="bg-red-500/20 text-red-300 p-3 rounded-md text-center">{error}</p>}
 
             {/* Create Class */}
@@ -119,10 +134,11 @@ const TeacherDashboard: React.FC<{ profile: UserProfile }> = ({ profile }) => {
                                 </span>
                             </div>
                             <div className="flex gap-4 mt-4">
-                                <button onClick={() => handleSessionToggle(c.id, c.isLive)} className={`w-full px-4 py-2 rounded-md transition ${c.isLive ? 'bg-red-600 hover:bg-red-700' : 'bg-green-600 hover:bg-green-700'} text-white`}>
-                                    {c.isLive ? 'End Session' : 'Start Session'}
-                                </button>
-                                {c.isLive && <Link to={`/live/${c.id}`} className="w-full text-center bg-[#a435f0] text-white px-4 py-2 rounded-md hover:bg-[#5624d0] transition">Join</Link>}
+                                {!c.isLive && (
+                                     <button onClick={() => handleStartSession(c.id)} className="w-full px-4 py-2 rounded-md transition bg-green-600 hover:bg-green-700 text-white">
+                                        Start Live Session
+                                    </button>
+                                )}
                             </div>
                         </div>
                     )) : <p className="text-gray-400">You haven't created any classes yet.</p>}
@@ -150,95 +166,69 @@ const TeacherDashboard: React.FC<{ profile: UserProfile }> = ({ profile }) => {
 };
 
 const StudentDashboard: React.FC<{ profile: UserProfile }> = ({ profile }) => {
-    const [allClasses, setAllClasses] = useState<Class[]>([]);
-    const [myClassIds, setMyClassIds] = useState<string[]>([]);
+    const [liveClasses, setLiveClasses] = useState<Class[]>([]);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState('');
-
-    const fetchData = useCallback(async () => {
-        try {
-            setLoading(true);
-            setError('');
-            const [classes, enrolledIds] = await Promise.all([
-                api.getAllClasses(),
-                api.getStudentEnrollments(profile.uid)
-            ]);
-            setAllClasses(classes);
-            setMyClassIds(enrolledIds);
-        } catch (err) {
-            setError('Failed to load dashboard data.');
-            console.error(err);
-        } finally {
-            setLoading(false);
-        }
-    }, [profile.uid]);
+    
+    const [isModalOpen, setIsModalOpen] = useState(false);
+    const [activeClassId, setActiveClassId] = useState<string | null>(null);
 
     useEffect(() => {
-        fetchData();
-    }, [fetchData]);
+        setLoading(true);
+        const q = db.collection('classes').where('isLive', '==', true);
+        const unsubscribe = q.onSnapshot(
+            (querySnapshot) => {
+                const live = querySnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })) as Class[];
+                setLiveClasses(live);
+                setLoading(false);
+            },
+            (err) => {
+                console.error(err);
+                setError('Failed to listen for live classes.');
+                setLoading(false);
+            }
+        );
+        return () => unsubscribe();
+    }, []);
+    
+    const handleJoin = (classId: string) => {
+        setActiveClassId(classId);
+        setIsModalOpen(true);
+    };
 
-    const handleJoinRequest = async (classToJoin: Class) => {
-        try {
-            await api.requestToJoinClass(classToJoin, profile);
-            alert('Request sent!');
-            // Ideally, update UI to show "Request Pending"
-        } catch (err) {
-            setError('Failed to send join request.');
-        }
+    const handleLeave = () => {
+        setIsModalOpen(false);
+        setActiveClassId(null);
     };
     
     if (loading) return <div className="mt-8"><Spinner /></div>;
 
-    const myClasses = allClasses.filter(c => myClassIds.includes(c.id));
-    const availableClasses = allClasses.filter(c => !myClassIds.includes(c.id));
-
-
     return (
         <div className="space-y-12">
+            {isModalOpen && activeClassId && (
+                <LiveSessionModal classId={activeClassId} userProfile={profile} onClose={handleLeave} />
+            )}
              {error && <p className="bg-red-500/20 text-red-300 p-3 rounded-md text-center">{error}</p>}
             
-            {/* My Classes */}
             <section>
-                <h2 className="text-2xl font-bold text-white mb-4 neon-text-cyan">My Classes</h2>
+                <h2 className="text-2xl font-bold text-white mb-4 neon-text-cyan">Live Classes Happening Now</h2>
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-                     {myClasses.length > 0 ? myClasses.map(c => (
-                        <div key={c.id} className="glass-card p-6 rounded-xl flex flex-col justify-between">
+                     {liveClasses.length > 0 ? liveClasses.map(c => (
+                        <div key={c.id} className="glass-card p-6 rounded-xl flex flex-col justify-between animate-pulse-border">
                             <div>
                                 <h3 className="text-xl font-bold text-white">{c.className}</h3>
                                 <p className="text-gray-400">{c.subject} by {c.teacherName}</p>
-                                <span className={`inline-block px-3 py-1 text-sm rounded-full mt-2 ${c.isLive ? 'bg-green-500/20 text-green-300' : 'bg-gray-500/20 text-gray-300'}`}>
-                                    {c.isLive ? 'Live' : 'Offline'}
+                                <span className='inline-block px-3 py-1 text-sm rounded-full mt-2 bg-green-500/20 text-green-300'>
+                                    Live
                                 </span>
                             </div>
                             <div className="mt-4">
-                                {c.isLive ? (
-                                    <Link to={`/live/${c.id}`} className="w-full text-center block bg-[#a435f0] text-white px-4 py-2 rounded-md hover:bg-[#5624d0] transition">Join Live Session</Link>
-                                ) : (
-                                    <button disabled className="w-full text-center bg-gray-600 text-gray-400 px-4 py-2 rounded-md cursor-not-allowed">Session Offline</button>
-                                )}
+                                <button onClick={() => handleJoin(c.id)} className="w-full text-center block bg-[#a435f0] text-white px-4 py-2 rounded-md hover:bg-[#5624d0] transition neon-glow">
+                                    Join Live Session
+                                </button>
                             </div>
                         </div>
-                    )) : <p className="text-gray-400">You are not enrolled in any classes yet.</p>}
-                </div>
-            </section>
-
-             {/* Available Classes */}
-            <section>
-                <h2 className="text-2xl font-bold text-white mb-4 neon-text-cyan">Available Classes</h2>
-                <div className="glass-card p-4 rounded-xl">
-                     {availableClasses.length > 0 ? (
-                         <ul className="divide-y divide-gray-700">
-                           {availableClasses.map(c => (
-                               <li key={c.id} className="flex justify-between items-center p-3">
-                                   <div>
-                                       <p className="text-white">{c.className} <span className="text-gray-400">({c.subject})</span></p>
-                                       <p className="text-sm text-gray-500">Taught by {c.teacherName}</p>
-                                   </div>
-                                   <button onClick={() => handleJoinRequest(c)} className="bg-[#00ddeb] text-black px-3 py-1 rounded-md hover:bg-opacity-80 transition text-sm">Request to Join</button>
-                               </li>
-                           ))}
-                        </ul>
-                    ) : <p className="text-gray-400 p-3">No new classes available right now.</p>}
+                    )) : <p className="text-gray-400">No classes are live right now. Check back soon!</p>}
                 </div>
             </section>
         </div>

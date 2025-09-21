@@ -1,4 +1,3 @@
-
 import React, { useState, useEffect, createContext, useContext } from 'react';
 // Fix: Update react-router-dom imports for v6 compatibility.
 import { HashRouter, Routes, Route, Link, useNavigate, useLocation } from 'react-router-dom';
@@ -13,7 +12,6 @@ import type { UserProfile } from './types';
 import HomePage from './pages/HomePage';
 import AuthPage from './pages/AuthPage';
 import DashboardPage from './pages/DashboardPage';
-import LiveSessionPage from './pages/LiveSessionPage';
 import Spinner from './components/Spinner';
 
 interface AuthContextType {
@@ -143,9 +141,6 @@ const App: React.FC = () => {
                         <Route path="/auth" element={<AuthPage />} />
                         <Route path="/dashboard" element={
                             <AuthGuard><DashboardPage /></AuthGuard>
-                        } />
-                        <Route path="/live/:classId" element={
-                             <AuthGuard><LiveSessionPage /></AuthGuard>
                         } />
                         <Route path="/" element={<HomePage />} />
                     </Routes>

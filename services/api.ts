@@ -1,4 +1,3 @@
-
 import {
     doc,
     getDoc,
@@ -78,7 +77,9 @@ export const startSession = async (classId: string): Promise<void> => {
 
 export const endSession = async (classId: string): Promise<void> => {
     const classRef = doc(db, 'classes', classId);
-    await updateDoc(classRef, { isLive: false, whiteboardActive: false });
+    await updateDoc(classRef, { isLive: false });
+    // Note: Ephemeral live_session data is left to be cleaned up by a script or naturally expire.
+    // Client-side cleanup of collections is not recommended for security/reliability.
 };
 
 
@@ -102,16 +103,4 @@ export const requestToJoinClass = async (classToJoin: Class, profile: UserProfil
         status: 'pending',
         createdAt: serverTimestamp()
     });
-};
-
-
-// Live Session Actions
-export const toggleWhiteboard = async (classId: string, newState: boolean): Promise<void> => {
-    const classRef = doc(db, 'classes', classId);
-    await updateDoc(classRef, { whiteboardActive: newState });
-};
-
-export const sendDrawingData = async (classId: string, drawingData: { x0: number, y0: number, x1: number, y1: number }): Promise<void> => {
-    const drawingsCollection = collection(db, `live_sessions/${classId}/whiteboard_drawings`);
-    await addDoc(drawingsCollection, drawingData);
 };
