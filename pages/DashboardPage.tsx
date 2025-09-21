@@ -1,34 +1,38 @@
-
 import React, { useState, useEffect, useCallback } from 'react';
+// Fix: Use useNavigate for react-router-dom v6 compatibility.
 import { useNavigate } from 'react-router-dom';
-import { collection, query, where, getDocs, doc, updateDoc, onSnapshot, addDoc, serverTimestamp } from 'firebase/firestore';
+import { onSnapshot, doc } from 'firebase/firestore';
 import { db } from '../services/firebase';
 import { useAuth } from '../App';
+import { 
+    getTeacherClasses, 
+    getPendingRequestsForTeacher, 
+    approveEnrollment,
+    startSession,
+    getAllClasses,
+    getStudentEnrollments,
+    requestToJoinClass,
+} from '../services/api';
 import type { Class, Enrollment, UserProfile } from '../types';
 import Spinner from '../components/Spinner';
 
-// TeacherDashboard Component (defined within DashboardPage)
+// TeacherDashboard Component
 const TeacherDashboard: React.FC<{ profile: UserProfile }> = ({ profile }) => {
     const [myClasses, setMyClasses] = useState<Class[]>([]);
     const [pendingRequests, setPendingRequests] = useState<Enrollment[]>([]);
     const [loading, setLoading] = useState(true);
+    // Fix: Use useNavigate for react-router-dom v6.
     const navigate = useNavigate();
 
     const fetchTeacherData = useCallback(async () => {
         setLoading(true);
         try {
-            // Fetch classes
-            const classesQuery = query(collection(db, 'classes'), where('teacherId', '==', profile.uid));
-            const classesSnapshot = await getDocs(classesQuery);
-            const classesData = classesSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })) as Class[];
+            const classesData = await getTeacherClasses(profile.uid);
             setMyClasses(classesData);
 
             if (classesData.length > 0) {
                 const classIds = classesData.map(c => c.id);
-                 // Fetch pending enrollments for those classes
-                const enrollmentsQuery = query(collection(db, 'enrollments'), where('classId', 'in', classIds), where('status', '==', 'pending'));
-                const enrollmentsSnapshot = await getDocs(enrollmentsQuery);
-                const requestsData = enrollmentsSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })) as Enrollment[];
+                const requestsData = await getPendingRequestsForTeacher(classIds);
                 setPendingRequests(requestsData);
             }
         } catch (error) {
@@ -42,14 +46,13 @@ const TeacherDashboard: React.FC<{ profile: UserProfile }> = ({ profile }) => {
     }, [fetchTeacherData]);
 
     const handleApprove = async (enrollmentId: string) => {
-        const enrollmentRef = doc(db, 'enrollments', enrollmentId);
-        await updateDoc(enrollmentRef, { status: 'approved' });
+        await approveEnrollment(enrollmentId);
         fetchTeacherData(); // Refresh data
     };
     
     const handleStartSession = async (classId: string) => {
-        const classRef = doc(db, 'classes', classId);
-        await updateDoc(classRef, { isLive: true });
+        await startSession(classId);
+        // Fix: Use navigate for navigation.
         navigate(`/live/${classId}`);
     };
 
@@ -91,27 +94,25 @@ const TeacherDashboard: React.FC<{ profile: UserProfile }> = ({ profile }) => {
 };
 
 
-// StudentDashboard Component (defined within DashboardPage)
+// StudentDashboard Component
 const StudentDashboard: React.FC<{ profile: UserProfile }> = ({ profile }) => {
     const [myClasses, setMyClasses] = useState<Class[]>([]);
     const [allClasses, setAllClasses] = useState<Class[]>([]);
     const [enrolledClassIds, setEnrolledClassIds] = useState<string[]>([]);
     const [loading, setLoading] = useState(true);
+    // Fix: Use useNavigate for react-router-dom v6.
     const navigate = useNavigate();
 
     useEffect(() => {
         const fetchAllData = async () => {
             setLoading(true);
             try {
-                // Fetch all classes for discovery
-                const allClassesSnapshot = await getDocs(collection(db, 'classes'));
-                const allClassesData = allClassesSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })) as Class[];
-                setAllClasses(allClassesData);
+                const [allClassesData, approvedClassIds] = await Promise.all([
+                    getAllClasses(),
+                    getStudentEnrollments(profile.uid)
+                ]);
                 
-                // Fetch student's enrollments
-                const enrollmentsQuery = query(collection(db, 'enrollments'), where('studentId', '==', profile.uid), where('status', '==', 'approved'));
-                const enrollmentsSnapshot = await getDocs(enrollmentsQuery);
-                const approvedClassIds = enrollmentsSnapshot.docs.map(doc => doc.data().classId);
+                setAllClasses(allClassesData);
                 setEnrolledClassIds(approvedClassIds);
 
             } catch (error) {
@@ -148,13 +149,7 @@ const StudentDashboard: React.FC<{ profile: UserProfile }> = ({ profile }) => {
     
     const handleRequestJoin = async (classToJoin: Class) => {
         try {
-            await addDoc(collection(db, 'enrollments'), {
-                classId: classToJoin.id,
-                studentId: profile.uid,
-                studentName: profile.name,
-                status: 'pending',
-                createdAt: serverTimestamp()
-            });
+            await requestToJoinClass(classToJoin, profile);
             alert(`Request sent to join ${classToJoin.className}!`);
             // You might want to update UI to show pending status
         } catch(error) {

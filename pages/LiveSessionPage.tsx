@@ -1,15 +1,15 @@
-
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
+// Fix: Use useNavigate for react-router-dom v6 compatibility.
 import { useParams, useNavigate } from 'react-router-dom';
-import { doc, onSnapshot, updateDoc, collection, addDoc, query, getDocs } from 'firebase/firestore';
+import { doc, onSnapshot, collection, query } from 'firebase/firestore';
 import { db } from '../services/firebase';
 import { useAuth } from '../App';
-import type { Class } from '../types';
+import { toggleWhiteboard, endSession, sendDrawingData } from '../services/api';
+import type { Class, ChatMessage } from '../types';
 import { createStudyBuddyChat, sendMessageToStudyBuddy } from '../services/geminiService';
-import type { ChatMessage } from '../types';
 import Spinner from '../components/Spinner';
 
-// Whiteboard Component (defined within LiveSessionPage)
+// Whiteboard Component
 const Whiteboard: React.FC<{ classId: string; isTeacher: boolean }> = ({ classId, isTeacher }) => {
     const canvasRef = useRef<HTMLCanvasElement>(null);
     const contextRef = useRef<CanvasRenderingContext2D | null>(null);
@@ -30,10 +30,9 @@ const Whiteboard: React.FC<{ classId: string; isTeacher: boolean }> = ({ classId
         }
     }, []);
 
-    const sendDrawingData = async (x0: number, y0: number, x1: number, y1: number) => {
+    const handleSendDrawingData = async (x0: number, y0: number, x1: number, y1: number) => {
         if (!isTeacher) return;
-        const drawingsCollection = collection(db, `live_sessions/${classId}/whiteboard_drawings`);
-        await addDoc(drawingsCollection, { x0, y0, x1, y1 });
+        await sendDrawingData(classId, { x0, y0, x1, y1 });
     };
 
     useEffect(() => {
@@ -80,7 +79,7 @@ const Whiteboard: React.FC<{ classId: string; isTeacher: boolean }> = ({ classId
         if (canvas && contextRef.current) {
             contextRef.current.lineTo(offsetX, offsetY);
             contextRef.current.stroke();
-            sendDrawingData(
+            handleSendDrawingData(
                 (offsetX - movementX) / canvas.width,
                 (offsetY - movementY) / canvas.height,
                 offsetX / canvas.width,
@@ -102,7 +101,7 @@ const Whiteboard: React.FC<{ classId: string; isTeacher: boolean }> = ({ classId
     );
 };
 
-// StudyBuddy Component (defined within LiveSessionPage)
+// StudyBuddy Component
 const StudyBuddy: React.FC<{ classInfo: Class }> = ({ classInfo }) => {
     const [messages, setMessages] = useState<ChatMessage[]>([]);
     const [input, setInput] = useState('');
@@ -178,6 +177,7 @@ const StudyBuddy: React.FC<{ classInfo: Class }> = ({ classInfo }) => {
 const LiveSessionPage: React.FC = () => {
     const { classId } = useParams<{ classId: string }>();
     const { userProfile } = useAuth();
+    // Fix: Use useNavigate for react-router-dom v6.
     const navigate = useNavigate();
     const [classInfo, setClassInfo] = useState<Class | null>(null);
     const [whiteboardActive, setWhiteboardActive] = useState(false);
@@ -194,7 +194,7 @@ const LiveSessionPage: React.FC = () => {
             if (docSnap.exists()) {
                 const data = docSnap.data() as Omit<Class, 'id'>;
                 setClassInfo({ id: docSnap.id, ...data });
-                setWhiteboardActive(data.isLive && (doc.data().whiteboardActive || false));
+                setWhiteboardActive(data.whiteboardActive || false);
             }
             setLoading(false);
         });
@@ -219,19 +219,13 @@ const LiveSessionPage: React.FC = () => {
 
     const handleToggleWhiteboard = async () => {
         if (!classId || !isTeacher) return;
-        const liveSessionRef = doc(db, 'live_sessions', classId);
-        try {
-            await updateDoc(liveSessionRef, { whiteboardActive: !whiteboardActive });
-        } catch (e) {
-            // If doc doesn't exist, set it
-            await updateDoc(doc(db, 'classes', classId), { whiteboardActive: !whiteboardActive });
-        }
+        await toggleWhiteboard(classId, !whiteboardActive);
     };
     
     const handleEndSession = async () => {
         if (!classId || !isTeacher) return;
-        const classRef = doc(db, 'classes', classId);
-        await updateDoc(classRef, { isLive: false, whiteboardActive: false });
+        await endSession(classId);
+        // Fix: Use navigate for navigation.
         navigate('/dashboard');
     };
 

@@ -1,5 +1,4 @@
 
-import type { User } from 'firebase/auth';
 
 export interface UserProfile {
     uid: string;
@@ -16,6 +15,8 @@ export interface Class {
     level: 'olevel' | 'alevel' | 'polytechnic';
     subject: string;
     isLive: boolean;
+    // Fix: Add optional 'whiteboardActive' property to match Firestore data.
+    whiteboardActive?: boolean;
 }
 
 export interface Enrollment {

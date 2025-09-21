@@ -1,10 +1,13 @@
 
 import React, { useState, useEffect, createContext, useContext } from 'react';
+// Fix: Update react-router-dom imports for v6 compatibility.
 import { HashRouter, Routes, Route, Link, useNavigate, useLocation } from 'react-router-dom';
-import { onAuthStateChanged } from 'firebase/auth';
-import type { User } from 'firebase/auth';
-import { auth, db } from './services/firebase';
-import { doc, getDoc } from 'firebase/firestore';
+// Fix: Use Firebase v8 compat syntax. onAuthStateChanged is a method on the auth object.
+// import { onAuthStateChanged } from 'firebase/auth';
+// Fix: Use Firebase v8 compat User type.
+import type firebase from 'firebase/compat/app';
+import { auth } from './services/firebase';
+import { getUserProfile } from './services/api';
 import type { UserProfile } from './types';
 
 import HomePage from './pages/HomePage';
@@ -14,7 +17,8 @@ import LiveSessionPage from './pages/LiveSessionPage';
 import Spinner from './components/Spinner';
 
 interface AuthContextType {
-    user: User | null;
+    // Fix: Use firebase.User type
+    user: firebase.User | null;
     userProfile: UserProfile | null;
     loading: boolean;
 }
@@ -24,21 +28,18 @@ const AuthContext = createContext<AuthContextType>({ user: null, userProfile: nu
 export const useAuth = () => useContext(AuthContext);
 
 const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-    const [user, setUser] = useState<User | null>(null);
+    // Fix: Use firebase.User type
+    const [user, setUser] = useState<firebase.User | null>(null);
     const [userProfile, setUserProfile] = useState<UserProfile | null>(null);
     const [loading, setLoading] = useState(true);
 
     useEffect(() => {
-        const unsubscribe = onAuthStateChanged(auth, async (firebaseUser) => {
+        // Fix: Use auth.onAuthStateChanged for Firebase v8 compat
+        const unsubscribe = auth.onAuthStateChanged(async (firebaseUser) => {
             if (firebaseUser) {
                 setUser(firebaseUser);
-                const userDocRef = doc(db, "users", firebaseUser.uid);
-                const userDocSnap = await getDoc(userDocRef);
-                if (userDocSnap.exists()) {
-                    setUserProfile(userDocSnap.data() as UserProfile);
-                } else {
-                    setUserProfile(null); // Or handle error
-                }
+                const profile = await getUserProfile(firebaseUser.uid);
+                setUserProfile(profile);
             } else {
                 setUser(null);
                 setUserProfile(null);
@@ -56,10 +57,12 @@ const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => 
 
 const Header: React.FC = () => {
     const { user, loading } = useAuth();
+    // Fix: Use useNavigate for react-router-dom v6
     const navigate = useNavigate();
 
     const handleLogout = async () => {
         await auth.signOut();
+        // Fix: Use navigate for navigation
         navigate('/auth');
     };
 
@@ -107,12 +110,14 @@ const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) => (
 
 const AuthGuard: React.FC<{ children: React.ReactNode }> = ({ children }) => {
     const { user, loading } = useAuth();
+    // Fix: Use useNavigate for react-router-dom v6
     const navigate = useNavigate();
     const location = useLocation();
 
     useEffect(() => {
         if (!loading && !user) {
-            navigate('/auth', { state: { from: location }, replace: true });
+            // Fix: Use navigate with replace for navigation
+            navigate('/auth', { replace: true, state: { from: location } });
         }
     }, [user, loading, navigate, location]);
 
@@ -133,11 +138,16 @@ const App: React.FC = () => {
         <AuthProvider>
             <HashRouter>
                 <Layout>
+                    {/* Fix: Use Routes instead of Switch and the element prop for react-router-dom v6 */}
                     <Routes>
-                        <Route path="/" element={<HomePage />} />
                         <Route path="/auth" element={<AuthPage />} />
-                        <Route path="/dashboard" element={<AuthGuard><DashboardPage /></AuthGuard>} />
-                        <Route path="/live/:classId" element={<AuthGuard><LiveSessionPage /></AuthGuard>} />
+                        <Route path="/dashboard" element={
+                            <AuthGuard><DashboardPage /></AuthGuard>
+                        } />
+                        <Route path="/live/:classId" element={
+                             <AuthGuard><LiveSessionPage /></AuthGuard>
+                        } />
+                        <Route path="/" element={<HomePage />} />
                     </Routes>
                 </Layout>
             </HashRouter>
