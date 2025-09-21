@@ -1,0 +1,8 @@
+{
+  "name": "Exam Sidemann Live Teaching",
+  "description": "An interactive real-time online learning platform for the Zimbabwean education system, connecting teachers and students for live lessons with video chat, a collaborative whiteboard, and an AI study assistant.",
+  "requestFramePermissions": [
+    "camera",
+    "microphone"
+  ]
+}
