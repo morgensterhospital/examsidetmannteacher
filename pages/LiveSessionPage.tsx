@@ -1,274 +1,248 @@
-import React, { useState, useEffect, useRef } from 'react';
-// Fix: Use useNavigate for react-router-dom v6 compatibility.
-import { useParams, useNavigate } from 'react-router-dom';
-import { doc, onSnapshot, collection, query } from 'firebase/firestore';
-import { db } from '../services/firebase';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
+import { useParams } from 'react-router-dom';
 import { useAuth } from '../App';
-import { toggleWhiteboard, endSession, sendDrawingData } from '../services/api';
+import { db } from '../services/firebase'; // For real-time listeners
+import * as api from '../services/api';
+import * as gemini from '../services/geminiService';
 import type { Class, ChatMessage } from '../types';
-import { createStudyBuddyChat, sendMessageToStudyBuddy } from '../services/geminiService';
 import Spinner from '../components/Spinner';
 
-// Whiteboard Component
-const Whiteboard: React.FC<{ classId: string; isTeacher: boolean }> = ({ classId, isTeacher }) => {
-    const canvasRef = useRef<HTMLCanvasElement>(null);
-    const contextRef = useRef<CanvasRenderingContext2D | null>(null);
-    const [isDrawing, setIsDrawing] = useState(false);
 
-    useEffect(() => {
-        const canvas = canvasRef.current;
-        if (canvas) {
-            canvas.width = canvas.offsetWidth;
-            canvas.height = canvas.offsetHeight;
-            const context = canvas.getContext('2d');
-            if(context){
-                context.lineCap = 'round';
-                context.strokeStyle = '#00ddeb';
-                context.lineWidth = 5;
-                contextRef.current = context;
-            }
-        }
-    }, []);
-
-    const handleSendDrawingData = async (x0: number, y0: number, x1: number, y1: number) => {
-        if (!isTeacher) return;
-        await sendDrawingData(classId, { x0, y0, x1, y1 });
-    };
-
-    useEffect(() => {
-        const drawingsCollection = collection(db, `live_sessions/${classId}/whiteboard_drawings`);
-        const q = query(drawingsCollection);
-        const unsubscribe = onSnapshot(q, (snapshot) => {
-            snapshot.docChanges().forEach((change) => {
-                if (change.type === 'added') {
-                    const data = change.doc.data();
-                    const canvas = canvasRef.current;
-                    const context = contextRef.current;
-                    if(canvas && context){
-                        const { x0, y0, x1, y1 } = data;
-                        context.beginPath();
-                        context.moveTo(x0 * canvas.width, y0 * canvas.height);
-                        context.lineTo(x1 * canvas.width, y1 * canvas.height);
-                        context.stroke();
-                        context.closePath();
-                    }
-                }
-            });
-        });
-        return () => unsubscribe();
-    }, [classId]);
-    
-    const startDrawing = ({ nativeEvent }: React.MouseEvent) => {
-        if (!isTeacher) return;
-        const { offsetX, offsetY } = nativeEvent;
-        contextRef.current?.beginPath();
-        contextRef.current?.moveTo(offsetX, offsetY);
-        setIsDrawing(true);
-    };
-
-    const finishDrawing = () => {
-        if (!isTeacher) return;
-        contextRef.current?.closePath();
-        setIsDrawing(false);
-    };
-
-    const draw = ({ nativeEvent }: React.MouseEvent) => {
-        if (!isDrawing || !isTeacher) return;
-        const { offsetX, offsetY, movementX, movementY } = nativeEvent;
-        const canvas = canvasRef.current;
-        if (canvas && contextRef.current) {
-            contextRef.current.lineTo(offsetX, offsetY);
-            contextRef.current.stroke();
-            handleSendDrawingData(
-                (offsetX - movementX) / canvas.width,
-                (offsetY - movementY) / canvas.height,
-                offsetX / canvas.width,
-                offsetY / canvas.height
-            );
-        }
-    };
-
-    return (
-        <canvas
-            ref={canvasRef}
-            onMouseDown={startDrawing}
-            onMouseUp={finishDrawing}
-            onMouseMove={draw}
-            onMouseLeave={finishDrawing}
-            className={`w-full h-full rounded-lg ${isTeacher ? 'cursor-crosshair' : 'cursor-not-allowed'}`}
-            style={{ touchAction: 'none' }}
-        />
-    );
-};
-
-// StudyBuddy Component
-const StudyBuddy: React.FC<{ classInfo: Class }> = ({ classInfo }) => {
-    const [messages, setMessages] = useState<ChatMessage[]>([]);
-    const [input, setInput] = useState('');
-    const [isLoading, setIsLoading] = useState(false);
-    const messagesEndRef = useRef<HTMLDivElement>(null);
-
-    useEffect(() => {
-      createStudyBuddyChat(classInfo.subject, classInfo.level);
-      setMessages([{ role: 'model', text: `Hi! I'm your AI study buddy. Ask me anything about ${classInfo.subject}.` }]);
-    }, [classInfo]);
-    
-    useEffect(() => {
-      messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-    }, [messages]);
-
-    const handleSend = async (e: React.FormEvent) => {
-        e.preventDefault();
-        if (!input.trim() || isLoading) return;
-        
-        const userMessage: ChatMessage = { role: 'user', text: input };
-        setMessages(prev => [...prev, userMessage]);
-        setInput('');
-        setIsLoading(true);
-
-        const modelMessage: ChatMessage = { role: 'model', text: '' };
-        setMessages(prev => [...prev, modelMessage]);
-
-        await sendMessageToStudyBuddy(input, (chunk) => {
-            setMessages(prev => {
-                const lastMessage = prev[prev.length - 1];
-                if (lastMessage && lastMessage.role === 'model') {
-                    lastMessage.text += chunk;
-                    return [...prev.slice(0, -1), lastMessage];
-                }
-                return prev;
-            });
-        });
-        
-        setIsLoading(false);
-    };
-
-    return (
-        <div className="glass-card rounded-lg flex flex-col h-full w-full max-w-sm">
-            <h3 className="text-xl font-bold p-4 border-b border-[#3e4143] text-[#00ddeb]">AI Study Buddy</h3>
-            <div className="flex-1 p-4 overflow-y-auto space-y-4">
-                {messages.map((msg, index) => (
-                    <div key={index} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
-                        <div className={`max-w-[80%] p-3 rounded-lg ${msg.role === 'user' ? 'bg-[#5624d0] text-white' : 'bg-[#1c1d1f] text-gray-300'}`}>
-                           {msg.text}
-                           {isLoading && msg.role === 'model' && index === messages.length - 1 && <span className="inline-block w-2 h-2 ml-2 bg-white rounded-full animate-ping"></span>}
-                        </div>
-                    </div>
-                ))}
-                <div ref={messagesEndRef} />
-            </div>
-            <form onSubmit={handleSend} className="p-4 border-t border-[#3e4143] flex gap-2">
-                <input
-                    type="text"
-                    value={input}
-                    onChange={(e) => setInput(e.target.value)}
-                    placeholder="Ask a question..."
-                    disabled={isLoading}
-                    className="flex-1 p-2 bg-[#101113] border border-[#3e4143] rounded-md focus:ring-2 focus:ring-[#a435f0] focus:border-transparent"
-                />
-                <button type="submit" disabled={isLoading} className="bg-[#a435f0] text-white px-4 py-2 rounded-md hover:bg-[#5624d0] disabled:opacity-50">Send</button>
-            </form>
-        </div>
-    );
-};
-
-
-// Main LiveSessionPage Component
 const LiveSessionPage: React.FC = () => {
     const { classId } = useParams<{ classId: string }>();
     const { userProfile } = useAuth();
-    // Fix: Use useNavigate for react-router-dom v6.
-    const navigate = useNavigate();
     const [classInfo, setClassInfo] = useState<Class | null>(null);
-    const [whiteboardActive, setWhiteboardActive] = useState(false);
     const [loading, setLoading] = useState(true);
-    const localVideoRef = useRef<HTMLVideoElement>(null);
-    const remoteVideoRef = useRef<HTMLVideoElement>(null); // Simplified to one remote video
+    const [error, setError] = useState('');
 
-    const isTeacher = userProfile?.role === 'teacher';
+    // Whiteboard state
+    const canvasRef = useRef<HTMLCanvasElement>(null);
+    const isDrawing = useRef(false);
+    const lastPos = useRef<{ x: number, y: number } | null>(null);
 
-    useEffect(() => {
-        if (!classId) return;
-        const classDocRef = doc(db, 'classes', classId);
-        const unsubscribe = onSnapshot(classDocRef, (docSnap) => {
-            if (docSnap.exists()) {
-                const data = docSnap.data() as Omit<Class, 'id'>;
-                setClassInfo({ id: docSnap.id, ...data });
-                setWhiteboardActive(data.whiteboardActive || false);
-            }
-            setLoading(false);
-        });
+    // Study Buddy Chat state
+    const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
+    const [studyBuddyInput, setStudyBuddyInput] = useState('');
+    const [isBuddyTyping, setIsBuddyTyping] = useState(false);
+    const chatContainerRef = useRef<HTMLDivElement>(null);
 
-        return () => unsubscribe();
-    }, [classId]);
-
-    useEffect(() => {
-      const startMedia = async () => {
-          try {
-              const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
-              if (localVideoRef.current) {
-                  localVideoRef.current.srcObject = stream;
-              }
-          } catch (err) {
-              console.error("Error accessing media devices.", err);
-              alert("Could not access camera and microphone. Please check permissions.");
-          }
-      };
-      startMedia();
+    const drawLine = useCallback((x0: number, y0: number, x1: number, y1: number) => {
+        const ctx = canvasRef.current?.getContext('2d');
+        if (!ctx) return;
+        ctx.beginPath();
+        ctx.moveTo(x0, y0);
+        ctx.lineTo(x1, y1);
+        ctx.strokeStyle = '#FFFFFF';
+        ctx.lineWidth = 3;
+        ctx.lineCap = 'round';
+        ctx.stroke();
+        ctx.closePath();
     }, []);
 
-    const handleToggleWhiteboard = async () => {
-        if (!classId || !isTeacher) return;
-        await toggleWhiteboard(classId, !whiteboardActive);
-    };
+    useEffect(() => {
+        if (!classId) {
+            setError("No Class ID provided.");
+            setLoading(false);
+            return;
+        }
+
+        // Fetch class info and set up real-time listener
+        const classRef = db.collection('classes').doc(classId);
+        const unsubscribeClass = classRef.onSnapshot(
+            (doc) => {
+                if (doc.exists) {
+                    const data = { id: doc.id, ...doc.data() } as Class;
+                    if (!classInfo) { // On first load, create chat
+                        gemini.createStudyBuddyChat(data.subject, data.level);
+                    }
+                    setClassInfo(data);
+                    setLoading(false);
+                } else {
+                    setError("Class not found.");
+                    setLoading(false);
+                }
+            },
+            (err) => {
+                console.error(err);
+                setError("Failed to load class information.");
+                setLoading(false);
+            }
+        );
+
+        // Set up whiteboard drawing listener
+        const drawingsCollection = db.collection(`live_sessions/${classId}/whiteboard_drawings`);
+        const unsubscribeDrawings = drawingsCollection.onSnapshot(snapshot => {
+            snapshot.docChanges().forEach(change => {
+                if (change.type === 'added') {
+                    const data = change.doc.data();
+                    drawLine(data.x0, data.y0, data.x1, data.y1);
+                }
+            });
+        });
+
+        return () => {
+            unsubscribeClass();
+            unsubscribeDrawings();
+        };
+    }, [classId, drawLine, classInfo]);
+
+    // Canvas setup
+    useEffect(() => {
+        const canvas = canvasRef.current;
+        if (!canvas) return;
+        // Resize canvas to fit container
+        const resizeCanvas = () => {
+            const container = canvas.parentElement;
+            if (container) {
+                canvas.width = container.clientWidth;
+                canvas.height = container.clientHeight;
+            }
+        };
+        resizeCanvas();
+        window.addEventListener('resize', resizeCanvas);
+        return () => window.removeEventListener('resize', resizeCanvas);
+    }, [classInfo]);
     
-    const handleEndSession = async () => {
-        if (!classId || !isTeacher) return;
-        await endSession(classId);
-        // Fix: Use navigate for navigation.
-        navigate('/dashboard');
+    // Auto-scroll chat
+    useEffect(() => {
+        if(chatContainerRef.current) {
+            chatContainerRef.current.scrollTop = chatContainerRef.current.scrollHeight;
+        }
+    }, [chatMessages]);
+
+    const getCanvasPos = (e: React.MouseEvent): { x: number, y: number } | null => {
+        const canvas = canvasRef.current;
+        if (!canvas) return null;
+        const rect = canvas.getBoundingClientRect();
+        return {
+            x: e.clientX - rect.left,
+            y: e.clientY - rect.top
+        };
     };
 
-    if (loading) {
-        return <div className="h-screen flex items-center justify-center"><Spinner /></div>;
-    }
-    
-    if (!classInfo) {
-        return <div className="text-center text-red-500">Class not found.</div>
-    }
+    const handleMouseDown = (e: React.MouseEvent) => {
+        if (!classInfo?.whiteboardActive) return;
+        isDrawing.current = true;
+        const pos = getCanvasPos(e);
+        lastPos.current = pos;
+    };
+
+    const handleMouseMove = (e: React.MouseEvent) => {
+        if (!isDrawing.current || !classInfo?.whiteboardActive) return;
+        const currentPos = getCanvasPos(e);
+        if (lastPos.current && currentPos) {
+            drawLine(lastPos.current.x, lastPos.current.y, currentPos.x, currentPos.y);
+            api.sendDrawingData(classId!, { x0: lastPos.current.x, y0: lastPos.current.y, x1: currentPos.x, y1: currentPos.y });
+            lastPos.current = currentPos;
+        }
+    };
+
+    const handleMouseUp = () => {
+        isDrawing.current = false;
+        lastPos.current = null;
+    };
+
+    const handleToggleWhiteboard = async () => {
+        if (!classId) return;
+        await api.toggleWhiteboard(classId, !classInfo?.whiteboardActive);
+    };
+
+    const handleSendChatMessage = async (e: React.FormEvent) => {
+        e.preventDefault();
+        if (!studyBuddyInput.trim() || isBuddyTyping) return;
+
+        const userMessage: ChatMessage = { role: 'user', text: studyBuddyInput };
+        setChatMessages(prev => [...prev, userMessage]);
+        setStudyBuddyInput('');
+        setIsBuddyTyping(true);
+
+        let modelMessageAccumulator = '';
+        let hasAddedModelMessage = false;
+
+        await gemini.sendMessageToStudyBuddy(userMessage.text, (chunk) => {
+            modelMessageAccumulator += chunk;
+            if (!hasAddedModelMessage) {
+                 setChatMessages(prev => [...prev, { role: 'model', text: modelMessageAccumulator }]);
+                 hasAddedModelMessage = true;
+            } else {
+                 setChatMessages(prev => {
+                    const newMessages = [...prev];
+                    newMessages[newMessages.length - 1].text = modelMessageAccumulator;
+                    return newMessages;
+                });
+            }
+        });
+        setIsBuddyTyping(false);
+    };
+
+    if (loading) return <div className="h-screen flex items-center justify-center"><Spinner /></div>;
+    if (error) return <div className="h-screen flex items-center justify-center text-red-400">{error}</div>;
 
     return (
-        <div className="flex flex-col h-[85vh]">
+        <div className="h-[calc(100vh-150px)] flex flex-col">
             <div className="flex justify-between items-center mb-4">
-                <h1 className="text-3xl font-bold">{classInfo?.className}</h1>
                 <div>
-                  {isTeacher && (
-                      <>
-                        <button onClick={handleToggleWhiteboard} className="bg-blue-500 text-white px-4 py-2 rounded-md mr-4 hover:bg-blue-600 transition">
-                            {whiteboardActive ? 'Show Video' : 'Show Whiteboard'}
-                        </button>
-                        <button onClick={handleEndSession} className="bg-red-600 text-white px-4 py-2 rounded-md hover:bg-red-700 transition">
-                            End Session
-                        </button>
-                      </>
-                  )}
+                    <h1 className="text-3xl font-bold text-white">{classInfo?.className}</h1>
+                    <p className="text-gray-400">{classInfo?.subject}</p>
                 </div>
+                {userProfile?.role === 'teacher' && (
+                    <button onClick={handleToggleWhiteboard} className="bg-[#a435f0] text-white px-4 py-2 rounded-md hover:bg-[#5624d0] transition">
+                        {classInfo?.whiteboardActive ? 'Disable' : 'Enable'} Whiteboard
+                    </button>
+                )}
             </div>
 
-            <div className="flex-1 grid grid-cols-1 lg:grid-cols-4 gap-4 h-full">
-                <div className="lg:col-span-3 glass-card rounded-lg p-2 flex justify-center items-center">
-                    {whiteboardActive ? (
-                        <Whiteboard classId={classId!} isTeacher={isTeacher} />
-                    ) : (
-                         <video ref={isTeacher ? localVideoRef : remoteVideoRef} autoPlay playsInline muted={isTeacher} className="w-full h-full object-contain rounded-lg" />
+            <div className="flex-grow grid grid-cols-3 gap-6">
+                {/* Whiteboard */}
+                <div className="col-span-2 glass-card rounded-xl relative p-2">
+                     {!classInfo?.whiteboardActive && (
+                        <div className="absolute inset-0 bg-black/70 flex items-center justify-center rounded-xl z-10">
+                            <p className="text-2xl text-white">Whiteboard is disabled.</p>
+                        </div>
                     )}
+                    <canvas
+                        ref={canvasRef}
+                        onMouseDown={handleMouseDown}
+                        onMouseMove={handleMouseMove}
+                        onMouseUp={handleMouseUp}
+                        onMouseLeave={handleMouseUp} // Stop drawing if mouse leaves canvas
+                        className="rounded-lg cursor-crosshair"
+                    />
                 </div>
-                <div className="flex flex-col gap-4">
-                    <div className="glass-card rounded-lg p-2 aspect-video">
-                       <video ref={isTeacher ? remoteVideoRef : localVideoRef} autoPlay playsInline muted={!isTeacher} className="w-full h-full object-cover rounded-lg" />
-                       <p className="text-sm text-center -mt-6 text-white bg-black/50 rounded-b-lg">{isTeacher ? "Student View" : userProfile?.name}</p>
+
+                {/* Study Buddy Chat */}
+                <div className="col-span-1 glass-card rounded-xl flex flex-col p-4">
+                    <h2 className="text-xl font-bold text-white mb-2 neon-text-cyan flex items-center gap-2">
+                        <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" /></svg>
+                        AI Study Buddy
+                    </h2>
+                    <div ref={chatContainerRef} className="flex-grow overflow-y-auto pr-2 space-y-4">
+                        {chatMessages.map((msg, index) => (
+                            <div key={index} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
+                                <div className={`max-w-[80%] p-3 rounded-xl ${msg.role === 'user' ? 'bg-[#5624d0]' : 'bg-[#3e4143]'} text-white`}>
+                                    {msg.text}
+                                </div>
+                            </div>
+                        ))}
+                        {isBuddyTyping && !chatMessages.some(m => m.role === 'model' && m.text.length > 0) && (
+                             <div className="flex justify-start">
+                                <div className="p-3 rounded-xl bg-[#3e4143] text-white">
+                                    <span className="animate-pulse">...</span>
+                                </div>
+                            </div>
+                        )}
                     </div>
-                   {!isTeacher && classInfo && <StudyBuddy classInfo={classInfo}/>}
+                    <form onSubmit={handleSendChatMessage} className="mt-4 flex gap-2">
+                        <input
+                            type="text"
+                            value={studyBuddyInput}
+                            onChange={(e) => setStudyBuddyInput(e.target.value)}
+                            placeholder="Ask a question..."
+                            className="flex-grow p-2 bg-[#1c1d1f] border border-[#3e4143] rounded-md text-white"
+                            disabled={isBuddyTyping}
+                        />
+                        <button type="submit" disabled={isBuddyTyping} className="bg-[#00ddeb] text-black px-4 py-2 rounded-md hover:bg-opacity-80 disabled:opacity-50">Send</button>
+                    </form>
                 </div>
             </div>
         </div>
