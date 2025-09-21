@@ -6,6 +6,60 @@ import Spinner from '../components/Spinner';
 import LiveSessionModal from '../components/LiveSessionModal';
 import { db } from '../services/firebase';
 
+const RoleSelection: React.FC<{ uid: string; name: string }> = ({ uid, name }) => {
+    const [role, setRole] = useState<'student' | 'teacher'>('student');
+    const [loading, setLoading] = useState(false);
+    const [error, setError] = useState('');
+
+    const handleSubmit = async (e: React.FormEvent) => {
+        e.preventDefault();
+        setLoading(true);
+        setError('');
+        try {
+            await api.updateUserRole(uid, role);
+            // Reload the page to refresh the auth context and show the correct dashboard
+            window.location.reload();
+        } catch (err) {
+            setError('Failed to update profile. Please try again.');
+            setLoading(false);
+            console.error(err);
+        }
+    };
+    
+    return (
+        <div className="flex justify-center items-center py-12">
+            <div className="w-full max-w-md p-8 space-y-6 glass-card rounded-xl">
+                <div className="text-center">
+                    <h1 className="text-4xl font-bold text-white neon-text-purple">Complete Your Profile</h1>
+                    <p className="text-gray-400 mt-2">
+                        Welcome, {name}! To get started, please tell us who you are.
+                    </p>
+                </div>
+                {error && <p className="bg-red-500/20 text-red-300 p-3 rounded-md text-center">{error}</p>}
+                <form className="space-y-6" onSubmit={handleSubmit}>
+                    <div>
+                        <label className="block text-sm font-medium text-center text-[#cbb6e4] mb-3">I am a...</label>
+                        <div className="flex gap-4">
+                            <label className="flex-1 p-4 border-2 border-[#3e4143] rounded-md cursor-pointer has-[:checked]:bg-[#5624d0]/50 has-[:checked]:border-[#a435f0] transition text-center">
+                                <input type="radio" name="role" value="student" checked={role === 'student'} onChange={() => setRole('student')} className="sr-only" />
+                                <span className="text-lg font-bold text-white">Student</span>
+                            </label>
+                            <label className="flex-1 p-4 border-2 border-[#3e4143] rounded-md cursor-pointer has-[:checked]:bg-[#5624d0]/50 has-[:checked]:border-[#a435f0] transition text-center">
+                                <input type="radio" name="role" value="teacher" checked={role === 'teacher'} onChange={() => setRole('teacher')} className="sr-only"/>
+                                <span className="text-lg font-bold text-white">Teacher</span>
+                            </label>
+                        </div>
+                    </div>
+                    <button type="submit" disabled={loading} className="w-full bg-gradient-to-r from-[#a435f0] to-[#5624d0] text-white font-bold py-3 px-4 rounded-md hover:opacity-90 transition transform hover:scale-105 disabled:opacity-50 disabled:cursor-not-allowed neon-glow">
+                        {loading ? 'Saving...' : 'Continue'}
+                    </button>
+                </form>
+            </div>
+        </div>
+    );
+};
+
+
 const TeacherDashboard: React.FC<{ profile: UserProfile }> = ({ profile }) => {
     const [classes, setClasses] = useState<Class[]>([]);
     const [requests, setRequests] = useState<Enrollment[]>([]);
@@ -236,10 +290,15 @@ const StudentDashboard: React.FC<{ profile: UserProfile }> = ({ profile }) => {
 };
 
 const DashboardPage: React.FC = () => {
-    const { userProfile, loading: authLoading } = useAuth();
+    const { userProfile, user, loading: authLoading } = useAuth();
 
     if (authLoading) {
         return <div className="h-full flex items-center justify-center"><Spinner /></div>;
+    }
+
+    // If the user is logged in but hasn't selected a role, show the role selection component.
+    if (userProfile && user && !userProfile.role) {
+        return <RoleSelection uid={user.uid} name={userProfile.name} />;
     }
 
     return (

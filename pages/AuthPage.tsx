@@ -1,19 +1,13 @@
-
 import React, { useState } from 'react';
 // Fix: Use useNavigate for react-router-dom v6.
 import { useNavigate } from 'react-router-dom';
-// Fix: Remove v9 imports, use auth object methods instead.
-// import { createUserWithEmailAndPassword, signInWithEmailAndPassword, updateProfile } from 'firebase/auth';
 import { auth, googleProvider } from '../services/firebase';
 import { createUserProfile, getUserProfile } from '../services/api';
-import type firebase from 'firebase/compat/app';
 
 const AuthPage: React.FC = () => {
     const [isLogin, setIsLogin] = useState(true);
     const [error, setError] = useState('');
     const [loading, setLoading] = useState(false);
-    // State to manage post-Google sign-in profile creation
-    const [googleUser, setGoogleUser] = useState<firebase.User | null>(null);
 
     // Fix: Use useNavigate for react-router-dom v6.
     const navigate = useNavigate();
@@ -24,7 +18,6 @@ const AuthPage: React.FC = () => {
 
     // Registration fields
     const [name, setName] = useState('');
-    const [role, setRole] = useState<'student' | 'teacher'>('student');
 
     const handleLogin = async (e: React.FormEvent) => {
         e.preventDefault();
@@ -53,7 +46,8 @@ const AuthPage: React.FC = () => {
             // Fix: Check for user and use user.updateProfile for Firebase v8.
             if (user) {
                 await user.updateProfile({ displayName: name });
-                await createUserProfile(user, name, role);
+                // Create a profile without a role. Role will be selected on the dashboard.
+                await createUserProfile(user, name);
             }
             
             // Fix: Use navigate for navigation.
@@ -80,8 +74,9 @@ const AuthPage: React.FC = () => {
                 // Existing user, go to dashboard
                 navigate('/dashboard');
             } else {
-                // New user, show profile completion form
-                setGoogleUser(user);
+                // New user, create a partial profile and let them choose the role on the dashboard
+                await createUserProfile(user, user.displayName || 'New User');
+                navigate('/dashboard');
             }
         } catch (err: any) {
             setError(err.message);
@@ -90,54 +85,6 @@ const AuthPage: React.FC = () => {
         }
     };
 
-    const handleCompleteGoogleProfile = async (e: React.FormEvent) => {
-        e.preventDefault();
-        if (!googleUser) return;
-        setError('');
-        setLoading(true);
-        try {
-            await createUserProfile(googleUser, googleUser.displayName || 'New User', role);
-            navigate('/dashboard');
-        } catch (err: any) {
-            setError(err.message);
-        } finally {
-            setLoading(false);
-        }
-    };
-
-    if (googleUser) {
-        return (
-            <div className="flex justify-center items-center py-12">
-                <div className="w-full max-w-md p-8 space-y-6 glass-card rounded-xl">
-                    <div className="text-center">
-                        <h1 className="text-4xl font-bold text-white neon-text-purple">One Last Step...</h1>
-                        <p className="text-gray-400 mt-2">
-                            Welcome, {googleUser.displayName}! Tell us who you are.
-                        </p>
-                    </div>
-                    {error && <p className="bg-red-500/20 text-red-300 p-3 rounded-md text-center">{error}</p>}
-                    <form className="space-y-4" onSubmit={handleCompleteGoogleProfile}>
-                        <div className="pt-2">
-                            <label className="block text-sm font-medium text-[#cbb6e4] mb-2">I am a...</label>
-                            <div className="flex gap-4">
-                                <label className="flex-1 p-3 border border-[#3e4143] rounded-md cursor-pointer has-[:checked]:bg-[#5624d0]/50 has-[:checked]:border-[#a435f0]">
-                                    <input type="radio" name="role" value="student" checked={role === 'student'} onChange={() => setRole('student')} className="sr-only" />
-                                    <span className="text-white">Student</span>
-                                </label>
-                                <label className="flex-1 p-3 border border-[#3e4143] rounded-md cursor-pointer has-[:checked]:bg-[#5624d0]/50 has-[:checked]:border-[#a435f0]">
-                                    <input type="radio" name="role" value="teacher" checked={role === 'teacher'} onChange={() => setRole('teacher')} className="sr-only"/>
-                                    <span className="text-white">Teacher</span>
-                                </label>
-                            </div>
-                        </div>
-                        <button type="submit" disabled={loading} className="w-full bg-gradient-to-r from-[#a435f0] to-[#5624d0] text-white font-bold py-3 px-4 rounded-md hover:opacity-90 transition transform hover:scale-105 disabled:opacity-50 disabled:cursor-not-allowed neon-glow">
-                            {loading ? 'Processing...' : 'Complete Profile'}
-                        </button>
-                    </form>
-                </div>
-            </div>
-        );
-    }
 
     return (
         <div className="flex justify-center items-center py-12">
@@ -153,12 +100,10 @@ const AuthPage: React.FC = () => {
 
                 <form className="space-y-4" onSubmit={isLogin ? handleLogin : handleRegister}>
                     {!isLogin && (
-                        <>
-                            <div>
-                                <label className="block text-sm font-medium text-[#cbb6e4]">Full Name</label>
-                                <input type="text" value={name} onChange={(e) => setName(e.target.value)} required className="mt-1 w-full p-2 bg-[#1c1d1f] border border-[#3e4143] rounded-md" />
-                            </div>
-                        </>
+                        <div>
+                            <label className="block text-sm font-medium text-[#cbb6e4]">Full Name</label>
+                            <input type="text" value={name} onChange={(e) => setName(e.target.value)} required className="mt-1 w-full p-2 bg-[#1c1d1f] border border-[#3e4143] rounded-md" />
+                        </div>
                     )}
                     <div>
                         <label className="block text-sm font-medium text-[#cbb6e4]">Email Address</label>
@@ -168,23 +113,6 @@ const AuthPage: React.FC = () => {
                         <label className="block text-sm font-medium text-[#cbb6e4]">Password</label>
                         <input type="password" value={password} onChange={(e) => setPassword(e.target.value)} required className="mt-1 w-full p-2 bg-[#1c1d1f] border border-[#3e4143] rounded-md" />
                     </div>
-                     {!isLogin && (
-                        <>
-                            <div className="pt-2">
-                               <label className="block text-sm font-medium text-[#cbb6e4] mb-2">I am a...</label>
-                                <div className="flex gap-4">
-                                    <label className="flex-1 p-3 border border-[#3e4143] rounded-md cursor-pointer has-[:checked]:bg-[#5624d0]/50 has-[:checked]:border-[#a435f0]">
-                                        <input type="radio" name="role" value="student" checked={role === 'student'} onChange={() => setRole('student')} className="sr-only" />
-                                        <span className="text-white">Student</span>
-                                    </label>
-                                    <label className="flex-1 p-3 border border-[#3e4143] rounded-md cursor-pointer has-[:checked]:bg-[#5624d0]/50 has-[:checked]:border-[#a435f0]">
-                                        <input type="radio" name="role" value="teacher" checked={role === 'teacher'} onChange={() => setRole('teacher')} className="sr-only"/>
-                                        <span className="text-white">Teacher</span>
-                                    </label>
-                                </div>
-                            </div>
-                        </>
-                    )}
                     <button type="submit" disabled={loading} className="w-full bg-gradient-to-r from-[#a435f0] to-[#5624d0] text-white font-bold py-3 px-4 rounded-md hover:opacity-90 transition transform hover:scale-105 disabled:opacity-50 disabled:cursor-not-allowed neon-glow">
                         {loading ? 'Processing...' : (isLogin ? 'Login' : 'Register')}
                     </button>

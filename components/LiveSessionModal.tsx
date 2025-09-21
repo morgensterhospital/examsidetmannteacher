@@ -200,7 +200,8 @@ const LiveSessionModal: React.FC<LiveSessionModalProps> = ({ classId, userProfil
                             <div key={id} className="flex-shrink-0 w-48 h-full bg-gray-800 rounded-md p-1">
                                 <p className="text-white text-xs text-center">Student</p>
                                 {/* FIX: Use callback ref instead of srcObject prop to avoid TypeScript error. */}
-                                <video ref={el => remoteVideoRefs.current[id] = el} autoPlay playsInline className="w-full h-24 object-cover rounded-md" />
+                                {/* FIX: Ensure the callback ref does not return a value. */}
+                                <video ref={el => { remoteVideoRefs.current[id] = el; }} autoPlay playsInline className="w-full h-24 object-cover rounded-md" />
                             </div>
                         ))}
                     </div>
