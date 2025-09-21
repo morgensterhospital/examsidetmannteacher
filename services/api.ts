@@ -26,12 +26,11 @@ export const getUserProfile = async (uid: string): Promise<UserProfile | null> =
     return null;
 };
 
-export const createUserProfileAndClass = async (
+export const createUserProfile = async (
     // Fix: Use firebase.User type
     user: firebase.User,
     name: string,
-    role: 'student' | 'teacher',
-    classDetails: { className: string; level: string; subject: string }
+    role: 'student' | 'teacher'
 ): Promise<void> => {
     await setDoc(doc(db, 'users', user.uid), {
         uid: user.uid,
@@ -39,18 +38,21 @@ export const createUserProfileAndClass = async (
         email: user.email,
         role,
     });
-
-    if (role === 'teacher') {
-        await addDoc(collection(db, 'classes'), {
-            teacherId: user.uid,
-            teacherName: name,
-            ...classDetails,
-            isLive: false,
-        });
-    }
 };
 
 // Teacher Actions
+export const createClass = async (
+    teacherProfile: UserProfile,
+    classDetails: { className: string; level: 'olevel' | 'alevel' | 'polytechnic'; subject: string }
+): Promise<void> => {
+    await addDoc(collection(db, 'classes'), {
+        teacherId: teacherProfile.uid,
+        teacherName: teacherProfile.name,
+        ...classDetails,
+        isLive: false,
+    });
+};
+
 export const getTeacherClasses = async (uid: string): Promise<Class[]> => {
     const classesQuery = query(collection(db, 'classes'), where('teacherId', '==', uid));
     const classesSnapshot = await getDocs(classesQuery);

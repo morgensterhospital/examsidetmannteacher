@@ -1,10 +1,11 @@
+
 import React, { useState } from 'react';
 // Fix: Use useNavigate for react-router-dom v6.
 import { useNavigate } from 'react-router-dom';
 // Fix: Remove v9 imports, use auth object methods instead.
 // import { createUserWithEmailAndPassword, signInWithEmailAndPassword, updateProfile } from 'firebase/auth';
 import { auth, googleProvider } from '../services/firebase';
-import { createUserProfileAndClass, getUserProfile } from '../services/api';
+import { createUserProfile, getUserProfile } from '../services/api';
 import type firebase from 'firebase/compat/app';
 
 const AuthPage: React.FC = () => {
@@ -24,13 +25,6 @@ const AuthPage: React.FC = () => {
     // Registration fields
     const [name, setName] = useState('');
     const [role, setRole] = useState<'student' | 'teacher'>('student');
-    const [level, setLevel] = useState<'olevel' | 'alevel' | 'polytechnic'>('olevel');
-    const [subject, setSubject] = useState('');
-    const [className, setClassName] = useState('');
-
-    const olevelSubjects = ["Mathematics", "English Language", "Integrated Science", "History", "Geography"];
-    const alevelSubjects = ["Mathematics", "Physics", "Chemistry", "Biology", "Literature in English"];
-    const polytechnicSubjects = ["Applied Mechanics", "Electrical Engineering", "Software Development", "Accounting"];
 
     const handleLogin = async (e: React.FormEvent) => {
         e.preventDefault();
@@ -59,7 +53,7 @@ const AuthPage: React.FC = () => {
             // Fix: Check for user and use user.updateProfile for Firebase v8.
             if (user) {
                 await user.updateProfile({ displayName: name });
-                await createUserProfileAndClass(user, name, role, { className, level, subject });
+                await createUserProfile(user, name, role);
             }
             
             // Fix: Use navigate for navigation.
@@ -102,7 +96,7 @@ const AuthPage: React.FC = () => {
         setError('');
         setLoading(true);
         try {
-            await createUserProfileAndClass(googleUser, googleUser.displayName || 'New User', role, { className, level, subject });
+            await createUserProfile(googleUser, googleUser.displayName || 'New User', role);
             navigate('/dashboard');
         } catch (err: any) {
             setError(err.message);
@@ -110,40 +104,6 @@ const AuthPage: React.FC = () => {
             setLoading(false);
         }
     };
-
-
-    const getSubjectOptions = () => {
-        switch(level) {
-            case 'olevel': return olevelSubjects;
-            case 'alevel': return alevelSubjects;
-            case 'polytechnic': return polytechnicSubjects;
-            default: return [];
-        }
-    }
-    
-    const renderTeacherFields = () => (
-        <>
-            <div>
-                <label className="block text-sm font-medium text-[#cbb6e4]">Curriculum Level</label>
-                <select value={level} onChange={(e) => setLevel(e.target.value as any)} className="mt-1 w-full p-2 bg-[#1c1d1f] border border-[#3e4143] rounded-md">
-                    <option value="olevel">O-Level</option>
-                    <option value="alevel">A-Level</option>
-                    <option value="polytechnic">Polytechnic</option>
-                </select>
-            </div>
-            <div>
-                <label className="block text-sm font-medium text-[#cbb6e4]">Subject</label>
-                <select value={subject} onChange={(e) => setSubject(e.target.value)} required className="mt-1 w-full p-2 bg-[#1c1d1f] border border-[#3e4143] rounded-md">
-                     <option value="" disabled>Select a subject</option>
-                     {getSubjectOptions().map(s => <option key={s} value={s}>{s}</option>)}
-                </select>
-            </div>
-             <div>
-                <label className="block text-sm font-medium text-[#cbb6e4]">Class Name</label>
-                <input type="text" value={className} onChange={(e) => setClassName(e.target.value)} required placeholder="e.g. A-Level Physics 2024" className="mt-1 w-full p-2 bg-[#1c1d1f] border border-[#3e4143] rounded-md" />
-            </div>
-        </>
-    );
 
     if (googleUser) {
         return (
@@ -170,7 +130,6 @@ const AuthPage: React.FC = () => {
                                 </label>
                             </div>
                         </div>
-                        {role === 'teacher' && renderTeacherFields()}
                         <button type="submit" disabled={loading} className="w-full bg-gradient-to-r from-[#a435f0] to-[#5624d0] text-white font-bold py-3 px-4 rounded-md hover:opacity-90 transition transform hover:scale-105 disabled:opacity-50 disabled:cursor-not-allowed neon-glow">
                             {loading ? 'Processing...' : 'Complete Profile'}
                         </button>
@@ -224,7 +183,6 @@ const AuthPage: React.FC = () => {
                                     </label>
                                 </div>
                             </div>
-                            {role === 'teacher' && renderTeacherFields()}
                         </>
                     )}
                     <button type="submit" disabled={loading} className="w-full bg-gradient-to-r from-[#a435f0] to-[#5624d0] text-white font-bold py-3 px-4 rounded-md hover:opacity-90 transition transform hover:scale-105 disabled:opacity-50 disabled:cursor-not-allowed neon-glow">
