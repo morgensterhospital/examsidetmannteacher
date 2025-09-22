@@ -1,26 +1,27 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { useAuth } from '../App';
+import { useAuth, useToast } from '../App';
 import * as api from '../services/api';
 import type { Class, Enrollment, UserProfile } from '../types';
 import Spinner from '../components/Spinner';
 import LiveSessionModal from '../components/LiveSessionModal';
 import { db } from '../services/firebase';
+import firebase from 'firebase/compat/app';
 
 const RoleSelection: React.FC<{ uid: string; name: string }> = ({ uid, name }) => {
     const [role, setRole] = useState<'student' | 'teacher'>('student');
     const [loading, setLoading] = useState(false);
-    const [error, setError] = useState('');
+    const toast = useToast();
 
     const handleSubmit = async (e: React.FormEvent) => {
         e.preventDefault();
         setLoading(true);
-        setError('');
         try {
             await api.updateUserRole(uid, role);
+            toast.success("Profile updated successfully!");
             // Reload the page to refresh the auth context and show the correct dashboard
             window.location.reload();
         } catch (err) {
-            setError('Failed to update profile. Please try again.');
+            toast.error('Failed to update profile. Please try again.');
             setLoading(false);
             console.error(err);
         }
@@ -35,7 +36,6 @@ const RoleSelection: React.FC<{ uid: string; name: string }> = ({ uid, name }) =
                         Welcome, {name}! To get started, please tell us who you are.
                     </p>
                 </div>
-                {error && <p className="bg-red-500/20 text-red-300 p-3 rounded-md text-center">{error}</p>}
                 <form className="space-y-6" onSubmit={handleSubmit}>
                     <div>
                         <label className="block text-sm font-medium text-center text-[#cbb6e4] mb-3">I am a...</label>
@@ -64,8 +64,8 @@ const TeacherDashboard: React.FC<{ profile: UserProfile }> = ({ profile }) => {
     const [classes, setClasses] = useState<Class[]>([]);
     const [requests, setRequests] = useState<Enrollment[]>([]);
     const [loading, setLoading] = useState(true);
-    const [error, setError] = useState('');
     const [newClass, setNewClass] = useState({ className: '', subject: '', level: 'olevel' as const });
+    const toast = useToast();
     
     const [isModalOpen, setIsModalOpen] = useState(false);
     const [activeClassId, setActiveClassId] = useState<string | null>(null);
@@ -73,13 +73,11 @@ const TeacherDashboard: React.FC<{ profile: UserProfile }> = ({ profile }) => {
     const fetchData = useCallback(async () => {
         try {
             setLoading(true);
-            setError('');
             const teacherClasses = await api.getTeacherClasses(profile.uid);
             setClasses(teacherClasses);
             if (teacherClasses.length > 0) {
                 const classIds = teacherClasses.map(c => c.id);
                 const pendingRequests = await api.getPendingRequestsForTeacher(classIds);
-                 // Enrich requests with class names
                 const enrichedRequests = pendingRequests.map(req => {
                     const classInfo = teacherClasses.find(c => c.id === req.classId);
                     return { ...req, className: classInfo?.className || 'Unknown Class' };
@@ -87,12 +85,12 @@ const TeacherDashboard: React.FC<{ profile: UserProfile }> = ({ profile }) => {
                 setRequests(enrichedRequests);
             }
         } catch (err) {
-            setError('Failed to load dashboard data. Please try again.');
+            toast.error('Failed to load dashboard data. Please try again.');
             console.error(err);
         } finally {
             setLoading(false);
         }
-    }, [profile.uid]);
+    }, [profile.uid, toast]);
 
     useEffect(() => {
         fetchData();
@@ -100,22 +98,23 @@ const TeacherDashboard: React.FC<{ profile: UserProfile }> = ({ profile }) => {
 
     const handleCreateClass = async (e: React.FormEvent) => {
         e.preventDefault();
-        setError('');
         try {
             await api.createClass(profile, newClass);
+            toast.success('Class created successfully!');
             setNewClass({ className: '', subject: '', level: 'olevel' });
             fetchData(); // Refresh data
         } catch (err) {
-            setError('Failed to create class.');
+            toast.error('Failed to create class.');
         }
     };
     
     const handleApprove = async (enrollmentId: string) => {
         try {
             await api.approveEnrollment(enrollmentId);
+            toast.success('Enrollment approved!');
             fetchData(); // Refresh
         } catch (err) {
-            setError('Failed to approve request.');
+            toast.error('Failed to approve request.');
         }
     };
 
@@ -126,13 +125,16 @@ const TeacherDashboard: React.FC<{ profile: UserProfile }> = ({ profile }) => {
             setIsModalOpen(true);
             fetchData();
         } catch (err) {
-             setError('Failed to start session.');
+             toast.error('Failed to start session.');
         }
     };
     
     const handleCloseModal = () => {
         if (activeClassId) {
-            api.endSession(activeClassId);
+            api.endSession(activeClassId).catch(err => {
+                console.error("Failed to end session cleanly", err);
+                toast.error("An issue occurred while ending the session.");
+            });
         }
         setIsModalOpen(false);
         setActiveClassId(null);
@@ -147,8 +149,6 @@ const TeacherDashboard: React.FC<{ profile: UserProfile }> = ({ profile }) => {
             {isModalOpen && activeClassId && (
                 <LiveSessionModal classId={activeClassId} userProfile={profile} onClose={handleCloseModal} />
             )}
-
-            {error && <p className="bg-red-500/20 text-red-300 p-3 rounded-md text-center">{error}</p>}
 
             {/* Create Class */}
             <section className="glass-card p-6 rounded-xl">
@@ -222,28 +222,62 @@ const TeacherDashboard: React.FC<{ profile: UserProfile }> = ({ profile }) => {
 const StudentDashboard: React.FC<{ profile: UserProfile }> = ({ profile }) => {
     const [liveClasses, setLiveClasses] = useState<Class[]>([]);
     const [loading, setLoading] = useState(true);
-    const [error, setError] = useState('');
+    const toast = useToast();
     
     const [isModalOpen, setIsModalOpen] = useState(false);
     const [activeClassId, setActiveClassId] = useState<string | null>(null);
 
     useEffect(() => {
-        setLoading(true);
-        const q = db.collection('classes').where('isLive', '==', true);
-        const unsubscribe = q.onSnapshot(
-            (querySnapshot) => {
-                const live = querySnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })) as Class[];
-                setLiveClasses(live);
-                setLoading(false);
-            },
-            (err) => {
-                console.error(err);
-                setError('Failed to listen for live classes.');
-                setLoading(false);
+        const setupLiveClassListener = async () => {
+            setLoading(true);
+            try {
+                const enrolledClassIds = await api.getStudentEnrollments(profile.uid);
+
+                if (enrolledClassIds.length === 0) {
+                    setLiveClasses([]);
+                    setLoading(false);
+                    return () => {}; // Return an empty unsubscribe function
+                }
+
+                const q = db.collection('classes')
+                    .where(firebase.firestore.FieldPath.documentId(), 'in', enrolledClassIds)
+                    .where('isLive', '==', true);
+                
+                const unsubscribe = q.onSnapshot(
+                    (querySnapshot) => {
+                        const live = querySnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })) as Class[];
+                        setLiveClasses(live);
+                        setLoading(false);
+                    },
+                    (err) => {
+                        console.error(err);
+                        toast.error('Failed to listen for live classes.');
+                        setLoading(false);
+                    }
+                );
+                return unsubscribe;
+
+            } catch (err) {
+                 console.error(err);
+                 toast.error('Could not fetch your enrollments.');
+                 setLoading(false);
+                 return () => {};
             }
-        );
-        return () => unsubscribe();
-    }, []);
+        };
+
+        let unsubscribe: () => void;
+        setupLiveClassListener().then(unsub => {
+            if (unsub) {
+                unsubscribe = unsub;
+            }
+        });
+
+        return () => {
+            if (unsubscribe) {
+                unsubscribe();
+            }
+        };
+    }, [profile.uid, toast]);
     
     const handleJoin = (classId: string) => {
         setActiveClassId(classId);
@@ -262,7 +296,6 @@ const StudentDashboard: React.FC<{ profile: UserProfile }> = ({ profile }) => {
             {isModalOpen && activeClassId && (
                 <LiveSessionModal classId={activeClassId} userProfile={profile} onClose={handleLeave} />
             )}
-             {error && <p className="bg-red-500/20 text-red-300 p-3 rounded-md text-center">{error}</p>}
             
             <section>
                 <h2 className="text-2xl font-bold text-white mb-4 neon-text-cyan">Live Classes Happening Now</h2>
@@ -282,7 +315,7 @@ const StudentDashboard: React.FC<{ profile: UserProfile }> = ({ profile }) => {
                                 </button>
                             </div>
                         </div>
-                    )) : <p className="text-gray-400">No classes are live right now. Check back soon!</p>}
+                    )) : <p className="text-gray-400">No classes you're enrolled in are live right now. Check back soon!</p>}
                 </div>
             </section>
         </div>
@@ -296,7 +329,6 @@ const DashboardPage: React.FC = () => {
         return <div className="h-full flex items-center justify-center"><Spinner /></div>;
     }
 
-    // If the user is logged in but hasn't selected a role, show the role selection component.
     if (userProfile && user && !userProfile.role) {
         return <RoleSelection uid={user.uid} name={userProfile.name} />;
     }

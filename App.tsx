@@ -1,9 +1,5 @@
-import React, { useState, useEffect, createContext, useContext } from 'react';
-// Fix: Update react-router-dom imports for v6 compatibility.
+import React, { useState, useEffect, createContext, useContext, useCallback } from 'react';
 import { HashRouter, Routes, Route, Link, useNavigate, useLocation } from 'react-router-dom';
-// Fix: Use Firebase v8 compat syntax. onAuthStateChanged is a method on the auth object.
-// import { onAuthStateChanged } from 'firebase/auth';
-// Fix: Use Firebase v8 compat User type.
 import type firebase from 'firebase/compat/app';
 import { auth } from './services/firebase';
 import { getUserProfile } from './services/api';
@@ -14,8 +10,83 @@ import AuthPage from './pages/AuthPage';
 import DashboardPage from './pages/DashboardPage';
 import Spinner from './components/Spinner';
 
+// --- START: Toast Notification System ---
+// To keep the file count low, the Toast system is integrated here.
+// In a larger app, this would be in its own files (context, component).
+
+type ToastType = 'success' | 'error' | 'info';
+
+interface Toast {
+    id: number;
+    message: string;
+    type: ToastType;
+}
+
+interface ToastContextType {
+    addToast: (message: string, type: ToastType) => void;
+}
+
+const ToastContext = createContext<ToastContextType | undefined>(undefined);
+
+export const useToast = () => {
+    const context = useContext(ToastContext);
+    if (!context) {
+        throw new Error('useToast must be used within a ToastProvider');
+    }
+    // Simple interface for easy calling
+    return {
+        success: (message: string) => context.addToast(message, 'success'),
+        error: (message: string) => context.addToast(message, 'error'),
+        info: (message: string) => context.addToast(message, 'info'),
+    };
+};
+
+const ToastProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
+    const [toasts, setToasts] = useState<Toast[]>([]);
+
+    const addToast = useCallback((message: string, type: ToastType) => {
+        const id = Date.now();
+        setToasts(currentToasts => [...currentToasts, { id, message, type }]);
+        setTimeout(() => {
+            setToasts(currentToasts => currentToasts.filter(toast => toast.id !== id));
+        }, 5000); // Auto-dismiss after 5 seconds
+    }, []);
+
+    return (
+        <ToastContext.Provider value={{ addToast }}>
+            {children}
+            <ToastContainer toasts={toasts} />
+        </ToastContext.Provider>
+    );
+};
+
+const ToastContainer: React.FC<{ toasts: Toast[] }> = ({ toasts }) => {
+    return (
+        <div className="fixed bottom-5 right-5 z-[100] w-full max-w-xs space-y-3">
+            {toasts.map(toast => (
+                <ToastMessage key={toast.id} message={toast.message} type={toast.type} />
+            ))}
+        </div>
+    );
+};
+
+const ToastMessage: React.FC<Omit<Toast, 'id'>> = ({ message, type }) => {
+    const baseClasses = 'p-4 rounded-lg shadow-2xl text-white font-semibold animate-fade-in-up';
+    const typeClasses = {
+        success: 'bg-green-600/80 backdrop-blur-sm border border-green-500',
+        error: 'bg-red-600/80 backdrop-blur-sm border border-red-500',
+        info: 'bg-blue-600/80 backdrop-blur-sm border border-blue-500',
+    };
+    return (
+        <div className={`${baseClasses} ${typeClasses[type]}`}>
+            {message}
+        </div>
+    );
+};
+// --- END: Toast Notification System ---
+
+
 interface AuthContextType {
-    // Fix: Use firebase.User type
     user: firebase.User | null;
     userProfile: UserProfile | null;
     loading: boolean;
@@ -26,13 +97,11 @@ const AuthContext = createContext<AuthContextType>({ user: null, userProfile: nu
 export const useAuth = () => useContext(AuthContext);
 
 const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-    // Fix: Use firebase.User type
     const [user, setUser] = useState<firebase.User | null>(null);
     const [userProfile, setUserProfile] = useState<UserProfile | null>(null);
     const [loading, setLoading] = useState(true);
 
     useEffect(() => {
-        // Fix: Use auth.onAuthStateChanged for Firebase v8 compat
         const unsubscribe = auth.onAuthStateChanged(async (firebaseUser) => {
             if (firebaseUser) {
                 setUser(firebaseUser);
@@ -55,13 +124,17 @@ const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => 
 
 const Header: React.FC = () => {
     const { user, loading } = useAuth();
-    // Fix: Use useNavigate for react-router-dom v6
     const navigate = useNavigate();
+    const toast = useToast();
 
     const handleLogout = async () => {
-        await auth.signOut();
-        // Fix: Use navigate for navigation
-        navigate('/auth');
+        try {
+            await auth.signOut();
+            toast.success("You have been logged out.");
+            navigate('/auth');
+        } catch(e) {
+            toast.error("Logout failed. Please try again.");
+        }
     };
 
     return (
@@ -108,13 +181,11 @@ const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) => (
 
 const AuthGuard: React.FC<{ children: React.ReactNode }> = ({ children }) => {
     const { user, loading } = useAuth();
-    // Fix: Use useNavigate for react-router-dom v6
     const navigate = useNavigate();
     const location = useLocation();
 
     useEffect(() => {
         if (!loading && !user) {
-            // Fix: Use navigate with replace for navigation
             navigate('/auth', { replace: true, state: { from: location } });
         }
     }, [user, loading, navigate, location]);
@@ -133,20 +204,21 @@ const AuthGuard: React.FC<{ children: React.ReactNode }> = ({ children }) => {
 
 const App: React.FC = () => {
     return (
-        <AuthProvider>
-            <HashRouter>
-                <Layout>
-                    {/* Fix: Use Routes instead of Switch and the element prop for react-router-dom v6 */}
-                    <Routes>
-                        <Route path="/auth" element={<AuthPage />} />
-                        <Route path="/dashboard" element={
-                            <AuthGuard><DashboardPage /></AuthGuard>
-                        } />
-                        <Route path="/" element={<HomePage />} />
-                    </Routes>
-                </Layout>
-            </HashRouter>
-        </AuthProvider>
+        <ToastProvider>
+            <AuthProvider>
+                <HashRouter>
+                    <Layout>
+                        <Routes>
+                            <Route path="/auth" element={<AuthPage />} />
+                            <Route path="/dashboard" element={
+                                <AuthGuard><DashboardPage /></AuthGuard>
+                            } />
+                            <Route path="/" element={<HomePage />} />
+                        </Routes>
+                    </Layout>
+                </HashRouter>
+            </AuthProvider>
+        </ToastProvider>
     );
 };
 

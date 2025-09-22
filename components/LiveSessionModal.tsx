@@ -1,15 +1,17 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { db } from '../services/firebase';
-import type { UserProfile, Class, Signal } from '../types';
+import type { UserProfile, Class } from '../types';
 import Spinner from './Spinner';
+import { useToast } from '../App';
 
-// WebRTC configuration
 const servers = {
     iceServers: [
         { urls: 'stun:stun.l.google.com:19302' },
         { urls: 'stun:stun1.l.google.com:19302' },
     ],
 };
+
+type ConnectionState = 'connecting' | 'connected' | 'failed' | 'disconnected' | 'closed';
 
 interface LiveSessionModalProps {
     classId: string;
@@ -21,16 +23,15 @@ const LiveSessionModal: React.FC<LiveSessionModalProps> = ({ classId, userProfil
     const [classInfo, setClassInfo] = useState<Class | null>(null);
     const [localStream, setLocalStream] = useState<MediaStream | null>(null);
     const [remoteStreams, setRemoteStreams] = useState<Record<string, MediaStream>>({});
+    const [connectionStatus, setConnectionStatus] = useState<ConnectionState>('connecting');
     const peerConnections = useRef<Record<string, RTCPeerConnection>>({});
     const localVideoRef = useRef<HTMLVideoElement>(null);
+    const toast = useToast();
 
-    // FIX: Add refs to manage remote video elements imperatively to fix srcObject error.
     const mainRemoteVideoRef = useRef<HTMLVideoElement>(null);
     const remoteVideoRefs = useRef<Record<string, HTMLVideoElement | null>>({});
 
-    // FIX: Effect to assign remote MediaStreams to video elements' srcObject property.
     useEffect(() => {
-        // This handles setting the srcObject for the main remote video (teacher's stream for student)
         if (userProfile.role === 'student' && classInfo?.teacherId && mainRemoteVideoRef.current) {
             const teacherStream = remoteStreams[classInfo.teacherId];
             if (teacherStream && mainRemoteVideoRef.current.srcObject !== teacherStream) {
@@ -38,7 +39,6 @@ const LiveSessionModal: React.FC<LiveSessionModalProps> = ({ classId, userProfil
             }
         }
 
-        // This handles setting srcObject for the gallery of remote videos (students' streams for teacher)
         Object.entries(remoteStreams).forEach(([id, stream]) => {
             const videoElement = remoteVideoRefs.current[id];
             if (videoElement && videoElement.srcObject !== stream) {
@@ -47,8 +47,7 @@ const LiveSessionModal: React.FC<LiveSessionModalProps> = ({ classId, userProfil
         });
     }, [remoteStreams, classInfo, userProfile.role]);
 
-    // Helper to send signals via Firestore
-    const sendSignal = async (target: string, data: any) => {
+    const sendSignal = useCallback(async (target: string, data: any) => {
         const signalPayload = {
             type: data.type,
             sender: userProfile.uid,
@@ -56,10 +55,9 @@ const LiveSessionModal: React.FC<LiveSessionModalProps> = ({ classId, userProfil
             data: data.sdp || data.candidate ? JSON.stringify(data) : undefined,
         };
         await db.collection('live_sessions').doc(classId).collection('signals').add(signalPayload);
-    };
+    }, [classId, userProfile.uid]);
 
-    // Creates a peer connection and sets up its listeners
-    const createPeerConnection = (peerId: string) => {
+    const createPeerConnection = useCallback((peerId: string) => {
         if (peerConnections.current[peerId]) return peerConnections.current[peerId];
 
         const pc = new RTCPeerConnection(servers);
@@ -75,22 +73,38 @@ const LiveSessionModal: React.FC<LiveSessionModalProps> = ({ classId, userProfil
 
         pc.ontrack = event => {
             setRemoteStreams(prev => ({ ...prev, [peerId]: event.streams[0] }));
+            if(userProfile.role === 'student' && peerId === classInfo?.teacherId) {
+                setConnectionStatus('connected');
+            }
         };
 
-        return pc;
-    };
+        pc.oniceconnectionstatechange = () => {
+             if (userProfile.role === 'student' && peerId === classInfo?.teacherId) {
+                const state = pc.iceConnectionState as ConnectionState;
+                 if (['failed', 'disconnected', 'closed'].includes(state)) {
+                     setConnectionStatus(state);
+                     toast.error("Connection to the teacher was lost.");
+                 }
+            }
+        }
 
-    // Main setup effect for media and signal listening
+        return pc;
+    }, [localStream, sendSignal, userProfile.role, classInfo?.teacherId, toast]);
+
     useEffect(() => {
-        // Get user media
-        navigator.mediaDevices.getUserMedia({ video: true, audio: true })
-            .then(stream => {
+        const setupMedia = async () => {
+            try {
+                const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
                 setLocalStream(stream);
                 if (localVideoRef.current) localVideoRef.current.srcObject = stream;
-            })
-            .catch(err => console.error("Error accessing media devices.", err));
-
-        // Firestore signal listener
+            } catch (err) {
+                console.error("Error accessing media devices.", err);
+                toast.error("Camera and microphone access is required. Please check your browser permissions.");
+                onClose();
+            }
+        };
+        setupMedia();
+        
         const unsubscribeSignals = db.collection('live_sessions').doc(classId).collection('signals')
             .where('target', '==', userProfile.uid)
             .onSnapshot(snapshot => {
@@ -116,38 +130,34 @@ const LiveSessionModal: React.FC<LiveSessionModalProps> = ({ classId, userProfil
                 });
             });
 
-        // Cleanup function
         return () => {
             unsubscribeSignals();
             localStream?.getTracks().forEach(track => track.stop());
             Object.values(peerConnections.current).forEach(pc => pc.close());
         };
-    }, [classId, userProfile.uid]);
+    }, [classId, userProfile.uid, createPeerConnection, sendSignal, onClose, toast]);
 
-    // Role-specific logic
     useEffect(() => {
         if (!localStream) return;
 
-        // Fetch class info once
         db.collection('classes').doc(classId).get().then(doc => {
             if (doc.exists) setClassInfo({ id: doc.id, ...doc.data() } as Class);
         });
 
         if (userProfile.role === 'teacher') {
-            // Teacher listens for students joining/leaving
             const unsubscribeStudents = db.collection('live_sessions').doc(classId).collection('students')
                 .onSnapshot(snapshot => {
                     snapshot.docChanges().forEach(async change => {
                         const studentId = change.doc.id;
                         if (change.type === 'added') {
-                            console.log(`Student ${studentId} joined. Creating offer.`);
+                            toast.info(`${change.doc.data().name} has joined.`);
                             const pc = createPeerConnection(studentId);
                             const offer = await pc.createOffer();
                             await pc.setLocalDescription(offer);
                             sendSignal(studentId, pc.localDescription);
                         }
                         if (change.type === 'removed') {
-                            console.log(`Student ${studentId} left.`);
+                            toast.info(`A student has left.`);
                             peerConnections.current[studentId]?.close();
                             delete peerConnections.current[studentId];
                             setRemoteStreams(prev => {
@@ -160,24 +170,49 @@ const LiveSessionModal: React.FC<LiveSessionModalProps> = ({ classId, userProfil
                 });
             return () => unsubscribeStudents();
         } else {
-            // Student announces their presence
             const studentRef = db.collection('live_sessions').doc(classId).collection('students').doc(userProfile.uid);
             studentRef.set({ name: userProfile.name, joinedAt: new Date() });
-            return () => { studentRef.delete(); };
+
+            // Student listens for teacher ending the session
+            const unsubscribeClass = db.collection('classes').doc(classId).onSnapshot(doc => {
+                 if (doc.exists && doc.data()?.isLive === false) {
+                    toast.info("The teacher has ended the session.");
+                    setTimeout(onClose, 2000);
+                }
+            });
+
+            return () => { 
+                studentRef.delete(); 
+                unsubscribeClass();
+            };
         }
-    }, [localStream, classId, userProfile.role, userProfile.uid, userProfile.name]);
+    }, [localStream, classId, userProfile, createPeerConnection, sendSignal, toast, onClose]);
 
     const renderMainVideo = () => {
         if (userProfile.role === 'teacher') {
             return <video ref={localVideoRef} autoPlay playsInline muted className="w-full h-full object-cover" />;
         }
+        
         // Student view
         const teacherStream = remoteStreams[classInfo?.teacherId || ''];
-        if (teacherStream) {
-            // FIX: Use ref instead of srcObject prop to avoid TypeScript error.
+        if (teacherStream && connectionStatus === 'connected') {
             return <video ref={mainRemoteVideoRef} autoPlay playsInline className="w-full h-full object-cover" />;
         }
-        return <div className="w-full h-full bg-black flex items-center justify-center text-white"><Spinner /> <p className="ml-4">Connecting to teacher...</p></div>;
+        
+        const statusMessages: Record<ConnectionState, string> = {
+            connecting: 'Connecting to teacher...',
+            connected: 'Connected!',
+            failed: 'Connection failed. Please try re-joining the session.',
+            disconnected: 'Connection lost. Attempting to reconnect...',
+            closed: 'The connection has been closed.'
+        }
+
+        return (
+             <div className="w-full h-full bg-black flex items-center justify-center text-white">
+                <Spinner />
+                <p className="ml-4">{statusMessages[connectionStatus] || 'Connecting...'}</p>
+            </div>
+        );
     };
 
     return (
@@ -199,8 +234,6 @@ const LiveSessionModal: React.FC<LiveSessionModalProps> = ({ classId, userProfil
                         {Object.entries(remoteStreams).map(([id, stream]) => (
                             <div key={id} className="flex-shrink-0 w-48 h-full bg-gray-800 rounded-md p-1">
                                 <p className="text-white text-xs text-center">Student</p>
-                                {/* FIX: Use callback ref instead of srcObject prop to avoid TypeScript error. */}
-                                {/* FIX: Ensure the callback ref does not return a value. */}
                                 <video ref={el => { remoteVideoRefs.current[id] = el; }} autoPlay playsInline className="w-full h-24 object-cover rounded-md" />
                             </div>
                         ))}
